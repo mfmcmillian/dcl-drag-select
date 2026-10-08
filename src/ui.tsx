@@ -1,5 +1,6 @@
 import { engine, PrimaryPointerInfo, UiCanvasInformation } from '@dcl/sdk/ecs'
 import { Color4 } from '@dcl/sdk/math'
+import { isMobile } from '@dcl/sdk/platform'
 import ReactEcs, { Label, ReactEcsRenderer, UiEntity } from '@dcl/sdk/react-ecs'
 
 type Point = { x: number; y: number }
@@ -28,6 +29,9 @@ let dragging = false
 let dragStart: Point = { x: 0, y: 0 }
 let dragEnd: Point = { x: 0, y: 0 }
 let selected = new Set<number>()
+let mobileSelecting = false
+let mobileAnchor: SelectableItem | null = null
+let showSelectionBox = false
 
 function boardOrigin(): Point {
   const canvas = UiCanvasInformation.getOrNull(engine.RootEntity)
@@ -67,11 +71,21 @@ function updateSelection() {
   selected = new Set(ITEMS.filter((item) => overlaps(box, item)).map((item) => item.id))
 }
 
+function itemCenter(item: SelectableItem): Point {
+  return {
+    x: item.x + item.width / 2,
+    y: item.y + item.height / 2
+  }
+}
+
 function beginDrag() {
+  if (isMobile()) return
+
   const point = pointerOnBoard()
   if (!point || !isInsideBoard(point)) return
 
   dragging = true
+  showSelectionBox = true
   dragStart = point
   dragEnd = point
   selected.clear()
@@ -81,8 +95,47 @@ function endDrag() {
   dragging = false
 }
 
+function startMobileAreaSelection() {
+  mobileSelecting = true
+  mobileAnchor = null
+  showSelectionBox = false
+  selected.clear()
+}
+
+function selectMobileItem(item: SelectableItem) {
+  if (!isMobile()) return
+
+  if (!mobileSelecting) {
+    selected = new Set([item.id])
+    showSelectionBox = false
+    return
+  }
+
+  if (!mobileAnchor) {
+    mobileAnchor = item
+    dragStart = itemCenter(item)
+    dragEnd = dragStart
+    selected = new Set([item.id])
+    showSelectionBox = true
+    return
+  }
+
+  if (mobileAnchor.id === item.id) {
+    selected = new Set([item.id])
+    mobileSelecting = false
+    mobileAnchor = null
+    showSelectionBox = false
+    return
+  }
+
+  dragEnd = itemCenter(item)
+  updateSelection()
+  mobileSelecting = false
+  mobileAnchor = null
+}
+
 export function dragSystem() {
-  if (!dragging) return
+  if (isMobile() || !dragging) return
 
   const point = pointerOnBoard()
   if (!point) return
@@ -93,6 +146,14 @@ export function dragSystem() {
 
 const SelectionUi = () => {
   const box = selectionBox()
+  const mobile = isMobile()
+  const instruction = mobile
+    ? mobileSelecting
+      ? mobileAnchor
+        ? 'TAP OPPOSITE BLOCK'
+        : 'TAP FIRST BLOCK'
+      : 'TAP A BLOCK'
+    : 'DRAG TO SELECT'
 
   return (
     <UiEntity
@@ -111,11 +172,30 @@ const SelectionUi = () => {
         uiBackground={{ color: Color4.create(0.06, 0.07, 0.09, 0.96) }}
       >
         <Label
-          value="DRAG TO SELECT"
-          fontSize={24}
+          value={instruction}
+          fontSize={mobile ? 18 : 24}
           color={Color4.White()}
           uiTransform={{ positionType: 'absolute', position: { top: 18, left: 20 }, width: 260, height: 34 }}
         />
+        {mobile && (
+          <UiEntity
+            uiTransform={{
+              positionType: 'absolute',
+              position: { top: 12, left: 250 },
+              width: 150,
+              height: 42,
+              justifyContent: 'center',
+              alignItems: 'center',
+              pointerFilter: 'block'
+            }}
+            uiBackground={{
+              color: mobileSelecting ? Color4.create(0.15, 0.75, 1, 1) : Color4.create(0.2, 0.23, 0.28, 1)
+            }}
+            onMouseDown={startMobileAreaSelection}
+          >
+            <Label value="AREA SELECT" fontSize={16} color={Color4.White()} />
+          </UiEntity>
+        )}
         <Label
           value={`${selected.size} selected`}
           fontSize={18}
@@ -133,17 +213,18 @@ const SelectionUi = () => {
               height: item.height,
               justifyContent: 'center',
               alignItems: 'center',
-              pointerFilter: 'none'
+              pointerFilter: mobile ? 'block' : 'none'
             }}
             uiBackground={{
               color: selected.has(item.id) ? Color4.create(0.15, 0.75, 1, 1) : Color4.create(0.28, 0.31, 0.36, 1)
             }}
+            onMouseDown={() => selectMobileItem(item)}
           >
             <Label value={`${item.id}`} fontSize={24} color={Color4.White()} />
           </UiEntity>
         ))}
 
-        {dragging && (
+        {showSelectionBox && (
           <UiEntity
             uiTransform={{
               positionType: 'absolute',
